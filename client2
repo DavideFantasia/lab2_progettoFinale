@@ -1,0 +1,71 @@
+#! /usr/bin/env python3
+import struct,socket,argparse, concurrent.futures, os.path
+
+
+
+Description = "Client di tipo B, manda multiple stringhe per connessione socket, prese da un file di testo dato in input"
+# defualt HOST e PORT
+HOST = "127.0.0.1"  
+PORT = 54105      
+
+def main(filesNames,host=HOST,port=PORT):
+    #creating a pool for the threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(filesNames)) as executor:
+        #reading all the file's name from the arguments
+        for name in filesNames:
+            if os.path.exists(name):
+                #if the path exist, a thread will take care of it
+                executor.submit(sendFileData, name,host,port)
+            else:
+                print(f"Il file {name} non esiste\n")
+            
+def sendFileData(fileName,host,port):
+    #reading all the text from the file
+    with open(fileName,'r') as file:
+        #splitting the lines and removing empty lines
+        lines = [line.rstrip() for line in file.readlines()]
+        lines = [x for x in lines if len(x)>0]
+        #starting the connection to the server
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((host, port))            
+            #invio del tipo di connessione al server
+            s.sendall(b'B')
+            for line in lines:
+               print(f"invio della linea: {line}\n")
+               data = line.encode()
+               s.sendall(struct.pack("!H",len(data)))
+               s.sendall(data)
+            #sending a 0 to let the server end the reading phase
+            s.sendall(struct.pack("!H",0))
+            s.shutdown(socket.SHUT_RDWR)
+
+
+            
+
+
+
+# Riceve esattamente n byte dal socket conn e li restituisce
+# il tipo restituto è "bytes": una sequenza immutabile di valori 0-255
+def recv_all(conn,n):
+  chunks = b''
+  bytes_recd = 0
+  while bytes_recd < n:
+    chunk = conn.recv(min(n - bytes_recd, 1024))
+    if len(chunk) == 0:
+      raise RuntimeError("socket connection broken")
+    chunks += chunk
+    bytes_recd = bytes_recd + len(chunk)
+  return chunks
+
+
+# questo codice viene eseguito solo se il file è eseguito direttamente
+# e non importato come modulo con import da un altro file
+if __name__ == '__main__':
+  # parsing della linea di comando vedere la guida
+  #    https://docs.python.org/3/howto/argparse.html
+  parser = argparse.ArgumentParser(description=Description, formatter_class=argparse.RawTextHelpFormatter)
+  parser.add_argument('fileName', help='text file of input', type = str, action='append',nargs='+')  
+  parser.add_argument('-a', help='host address', type = str, default=HOST)  
+  parser.add_argument('-p', help='port', type = int, default=PORT) 
+  args = parser.parse_args()
+  main(args.fileName[0],args.a,args.p)

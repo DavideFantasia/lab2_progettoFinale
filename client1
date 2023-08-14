@@ -1,0 +1,58 @@
+#! /usr/bin/env python3
+import os.path, struct,socket,argparse
+
+Description = "Client di tipo A, manda una singola stringa per connessione socket, prese da un file di testo dato in input"
+# defualt HOST e PORT
+HOST = "127.0.0.1"  
+PORT = 54105      
+
+
+def main(inputFile,host=HOST,port=PORT):
+    if os.path.exists(inputFile):
+        with open(inputFile,'r') as file:
+            lines = [line.rstrip() for line in file.readlines()]
+
+            # la prossima chiamata è blocking 
+            for line in lines:
+                # inizializzazione socket client 
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    print(f"=== Linea da Inviare: {line} ===\n")
+                    s.connect((host, port))
+                            
+                    #invio del tipo di connessione al server
+                    s.sendall(b'A')
+                    #invio della lunghezza della stringa
+                    s.sendall(struct.pack("!H",len(line)))
+                    #invio della striga
+                    s.sendall(line.encode())
+                    #chiusura connessione
+                    s.shutdown(socket.SHUT_RDWR)
+
+    else:
+       print(f"Il file {inputFile} non esiste\n")
+
+# Riceve esattamente n byte dal socket conn e li restituisce
+# il tipo restituto è "bytes": una sequenza immutabile di valori 0-255
+def recv_all(conn,n):
+  chunks = b''
+  bytes_recd = 0
+  while bytes_recd < n:
+    chunk = conn.recv(min(n - bytes_recd, 1024))
+    if len(chunk) == 0:
+      raise RuntimeError("socket connection broken")
+    chunks += chunk
+    bytes_recd = bytes_recd + len(chunk)
+  return chunks
+
+
+# questo codice viene eseguito solo se il file è eseguito direttamente
+# e non importato come modulo con import da un altro file
+if __name__ == '__main__':
+  # parsing della linea di comando vedere la guida
+  #    https://docs.python.org/3/howto/argparse.html
+  parser = argparse.ArgumentParser(description=Description, formatter_class=argparse.RawTextHelpFormatter)
+  parser.add_argument('fileName', help='text file of input', type = str)  
+  parser.add_argument('-a', help='host address', type = str, default=HOST)  
+  parser.add_argument('-p', help='port', type = int, default=PORT) 
+  args = parser.parse_args()
+  main(args.fileName,args.a,args.p)
