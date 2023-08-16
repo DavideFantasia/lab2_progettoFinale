@@ -2,7 +2,7 @@
 # server che fornisce l'elenco dei primi in un dato intervallo 
 # gestisce più clienti contemporaneamente usando i thread
 # invia il byte inutile all'inizio della connessione
-import argparse, sys, struct, socket, threading, concurrent.futures, logging
+import argparse, sys, struct, socket, threading, concurrent.futures, logging, subprocess, time, signal
 
 Description = "Server che gestisce le connessioni in ingresso"
 
@@ -11,7 +11,15 @@ HOST = "127.0.0.1"  # Standard loopback interface address (localhost)
 PORT = 54105  # Port to listen on (non-privileged ports are > 1023)
 Max_sequence_length = 2048 #massima lunghezza di una sequenza che viene inviata attraverso un socket o pipe
  
-def main(maxThreads, maxThreadLettori, maxThreadScrittori,withValgrind,host=HOST, port=PORT):
+def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, port=PORT):
+
+  #avvio del file archivio
+  archivioString = ["./archivio", str(numLettori), str(numScrittori)]
+  if withValgrind:
+    print("avvio con valgrind\n")
+    archivioString = ["valgrind", "--leak-check=full", "--show-leak-kinds=all", "--log-file=valgrind-%p.log"] + archivioString
+
+  archivioProcess = subprocess.Popen(archivioString)
 
   #creazione del file di log
   logging.basicConfig(filename='server.log', level=logging.INFO, format='%(message)s')
@@ -134,6 +142,9 @@ if __name__ == '__main__':
   parser.add_argument('-a', help='host address', type = str, default=HOST)  
   parser.add_argument('-p', help='port', type = int, default=PORT) 
   args = parser.parse_args()
+  if args.maxThread < 1:
+    print("=== error ===\n\tserver.py requires 'maxThread' greater than zero\n")
+    exit(1)
   main(args.maxThread,args.r,args.w,args.v,args.a,args.p)
 
 
