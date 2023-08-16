@@ -5,8 +5,8 @@
 ## How to launch the program:
 
 ```
-$ git clone git@github.com:user/progetto.git <dir>
-$ cd <dir>
+$ git clone git@github.com:DavideFantasia/lab2_progettoFinale.git <dest_dir>
+$ cd <dest_dir>
 $ make
 $ ./server.py <maxThread> -r <number of reader threads> -w <number of writer threads> -v <launching with valgrind>  &
 
