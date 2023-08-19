@@ -2,7 +2,7 @@
 # server che fornisce l'elenco dei primi in un dato intervallo 
 # gestisce più clienti contemporaneamente usando i thread
 # invia il byte inutile all'inizio della connessione
-import argparse, sys, struct, socket, threading, concurrent.futures, logging, subprocess, time, signal
+import argparse, sys, struct, socket, threading, concurrent.futures, logging, subprocess, time, signal, os
 
 Description = "Server che gestisce le connessioni in ingresso"
 
@@ -10,8 +10,17 @@ Description = "Server che gestisce le connessioni in ingresso"
 HOST = "127.0.0.1"  # Standard loopback interface address (localhost)
 PORT = 54105  # Port to listen on (non-privileged ports are > 1023)
 Max_sequence_length = 2048 #massima lunghezza di una sequenza che viene inviata attraverso un socket o pipe
+
+caposc_path = "caposc" #path for the named Pipe (FIFO)
+capolet_path = "capolet" #path for the named Pipe (FIFO)
  
 def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, port=PORT):
+
+  #creating the FIFO if not existing
+  if not os.path.exists(capolet_path):
+    os.mkfifo(capolet_path,mode = 0o666)
+  if not os.path.exists(caposc_path):
+    os.mkfifo(caposc_path, mode = 0o666)
 
   #avvio del file archivio
   archivioString = ["./archivio", str(numLettori), str(numScrittori)]
@@ -20,6 +29,14 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
     archivioString = ["valgrind", "--leak-check=full", "--show-leak-kinds=all", "--log-file=valgrind-%p.log"] + archivioString
 
   archivioProcess = subprocess.Popen(archivioString)
+
+  capolet_fd = os.open(capolet_path,os.O_WRONLY, 0o666)
+  #caposc_fd = os.open(caposc_path, os.O_WRONLY, 0o666)
+  caposc_fd = 10
+
+  if caposc_fd <= 0 : print("errore apertura caposc\n")
+  if capolet_fd <= 0 : print("errore apertura capolet\n")
+
 
   #creazione del file di log
   logging.basicConfig(filename='server.log', level=logging.INFO, format='%(message)s')
@@ -32,46 +49,60 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
       s.listen()
       with concurrent.futures.ThreadPoolExecutor(max_workers=maxThreads) as executor:
         while True:
-          print("In attesa di un client...")
           # mi metto in attesa di una connessione
           conn, addr = s.accept()
           # l'esecuzione di submit non è bloccante
           # fino a quando ci sono thread liberi
-          executor.submit(connection_handler, conn,addr)
+          executor.submit(connection_handler, conn,addr,capolet_fd,caposc_fd)
     except KeyboardInterrupt:
       pass
-    print('\n\t=== turning server of ===')
+    print('\n\t=== turning server off ===')
+
+    #closing the connection
     s.shutdown(socket.SHUT_RDWR)
-    #TODO:  il server deve terminare l'esecuzione chiudendo il socket con l'istruzione shutdown
-    # cancellando (con os.unlink) le FIFO caposc e capolet
-    # e inviando il segnale SIGTERM al programma archivio
+
+    #deleting the named pipe
+    #chiusura della pipe
+    os.close(capolet_fd)
+    #os.close(caposc_fd)
+
+    os.unlink(caposc_path)
+    os.unlink(capolet_path)
+
+    #closing the archive
+    archivioProcess.send_signal(signal.SIGTERM)
+
+    print('\n\t=== server off ===')
+
+    return 0
+    
+    ###########################################################################################
+    #TODO:  connessione funzionante via FIFO, verificare la corretta apertura e scrittura su pipe
+    ###########################################################################################
     
 
 # gestione di una singola connessione con un client
-def connection_handler(conn,addr): 
+# smista le connessioni in ingresso in base al tipo di connessione chiamando l'handler associato
+def connection_handler(conn,addr,capolet_fd,caposc_fd):
   with conn:  
-    print(f"{threading.current_thread().name} contattato da {addr}")
-
     # ---- attendo un carattere da 1 byte del tipo di connessione
     data = recv_all(conn,1)
     assert len(data)==1
     connection_type  = data.decode()
     
     if connection_type == 'A':
-      handler_A(conn)
+      handler_A(conn,capolet_fd)
     elif connection_type == 'B':
-      handler_B(conn)
+      handler_B(conn,caposc_fd)
     else:
       print("errore nella ricezione del tipo di connessione\n")
       conn.close(socket.SHUT_RDWR)
-
-  print(f"{threading.current_thread().name} finito con {addr}")
  
 
 
 # riceve esattamente n byte e li restituisce in un array di byte
 # il tipo restituto è "bytes": una sequenza immutabile di valori 0-255
-# analoga alla readn che abbiamo visto nel C
+# analoga alla readn
 def recv_all(conn,n):
   chunks = b''
   bytes_recd = 0
@@ -84,21 +115,34 @@ def recv_all(conn,n):
   return chunks
 
 
-def handler_A(conn):
-  print("connessione di tipo A")
+def handler_A(conn, capolet_fd):
+  #connessione A: deve scrivere sulla FIFO 'capolet'
+  #dimensione della stringa, che viene spacchettata
   data = recv_all(conn,2)
   strLen = struct.unpack("!H",data)[0]
-  print(f"lunghezza della stringa: {strLen}")
+
+  #verifico che la stringa non superi la lunghezza massima
+  assert strLen < Max_sequence_length, f"max sequence lenght: {Max_sequence_length}\nyour lenght: {strLen}"
+
+  #leggo strLen bytes, ovvero la stringa in ingresso
   data = recv_all(conn,strLen)
-  bytes_written = len(data)
-  line = data.decode()
-  #TODO: implementare la connessione via pipe
+
+  #scrittura sulla Pipe mandando prima la dimensione della stringa e poi la stringa
+  if os.write(capolet_fd,struct.pack("<i",strLen)) < 0:
+    print("errore scrittura lunghezza n")
+  
+  bytes_written = os.write(capolet_fd,data)
+  
+  if bytes_written<0:
+    print("errore scrittura dati\n")
+
+  #scrittura sul file server.log le statistiche
   msgLog('A',bytes_written)
-  print(f"\t----Stringa arrivata: {line} ----\n")
   
 
 
-def handler_B(conn):
+def handler_B(conn, caposc_fd):
+  #connessione B: deve scrivere sulla FIFO 'caposc'
   print("connessione di tipo B")
   bytes_written = 0
   #ad ogni ciclo leggiamo la lunghezza della stringa e poi la stringa
@@ -107,7 +151,7 @@ def handler_B(conn):
     #receving the lenght of the string
     data = recv_all(conn, 2)
     strLen = struct.unpack("!H",data)[0]
-        
+    assert strLen < Max_sequence_length, f"max sequence lenght: {Max_sequence_length}\nyour lenght: {strLen}"    
     #breaking condition
     if strLen == 0:
       print("\n\t=== EOF ===")

@@ -27,12 +27,49 @@ Oltre ai thread lettori e scrittori, il programma archivio deve avere:
 */
 
 #include "xerrori.h"
+#include <arpa/inet.h>
+#define FILE_POSITION __LINE__,__FILE__
+#define MAX_SEQUENCE_LENGTH 2048
 
 int main(int argc, char *argv[]){
-    printf("=== Avvio corretto dell'archivio ===\n");
+    printf("\n=== Avvio corretto dell'archivio ===\n");
 
-    if(argc!=3) termina("\nargomenti insufficienti\n");
+    if(argc!=3) xtermina("\nargomenti insufficienti\n",FILE_POSITION);
 
     printf("\n\targomenti in arrivo ad %s:\n\t -r: %d\t-w: %d\n",argv[0], atoi(argv[1]),atoi(argv[2]));
+
+    int capolet_fd = open("./capolet",O_RDONLY);
+    if(capolet_fd<0) xtermina("errore in apertura pipe\n",FILE_POSITION);
+
+    char readbuffer[MAX_SEQUENCE_LENGTH];
+    int length;
+    int e;
+
+    //leggo dalla pipe
+    while(true){
+        e = read(capolet_fd, &length, sizeof(int));
+
+        if(e < sizeof(int)){
+            xtermina("lenght reading error\n",FILE_POSITION);
+        }
+
+        printf("lunghezza: %d\n", length);
+
+        if(length>MAX_SEQUENCE_LENGTH) xtermina("max sequence lenght error\n",FILE_POSITION);
+;       
+        e=read(capolet_fd, readbuffer, length);
+        if(e<0){ 
+            printf("errno: %d",errno);
+            xtermina("read of string error\n",FILE_POSITION);
+        }
+        printf("stringa: %s\n",readbuffer);
+        //cleanin the buffer
+        memset(readbuffer,'\0',sizeof(readbuffer));
+    }
+
+    xclose(capolet_fd,__LINE__,__FILE__);
+    printf("\nLettura finita\n");
+
+
     return 0;
 }
