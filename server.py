@@ -13,6 +13,11 @@ Max_sequence_length = 2048 #massima lunghezza di una sequenza che viene inviata 
 
 caposc_path = "caposc" #path for the named Pipe (FIFO)
 capolet_path = "capolet" #path for the named Pipe (FIFO)
+
+#creating the mutexs for writing to the pipes
+capolet_mutex =  threading.Lock()
+caposc_mutex =  threading.Lock()
+
  
 def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, port=PORT):
 
@@ -31,11 +36,10 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
   archivioProcess = subprocess.Popen(archivioString)
 
   capolet_fd = os.open(capolet_path,os.O_WRONLY, 0o666)
-  #caposc_fd = os.open(caposc_path, os.O_WRONLY, 0o666)
-  caposc_fd = 10
+  caposc_fd = os.open(caposc_path, os.O_WRONLY, 0o666)
 
-  if caposc_fd <= 0 : print("errore apertura caposc\n")
-  if capolet_fd <= 0 : print("errore apertura capolet\n")
+  if caposc_fd < 0 : print("errore apertura caposc\n")
+  if capolet_fd < 0 : print("errore apertura capolet\n")
 
 
   #creazione del file di log
@@ -61,11 +65,11 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
     #closing the connection
     s.shutdown(socket.SHUT_RDWR)
 
-    #deleting the named pipe
     #chiusura della pipe
     os.close(capolet_fd)
-    #os.close(caposc_fd)
+    os.close(caposc_fd)
 
+    #deleting the named pipe
     os.unlink(caposc_path)
     os.unlink(capolet_path)
 
@@ -75,10 +79,6 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
     print('\n\t=== server off ===')
 
     return 0
-    
-    ###########################################################################################
-    #TODO:  connessione funzionante via FIFO, verificare la corretta apertura e scrittura su pipe
-    ###########################################################################################
     
 
 # gestione di una singola connessione con un client
@@ -97,7 +97,8 @@ def connection_handler(conn,addr,capolet_fd,caposc_fd):
     else:
       print("errore nella ricezione del tipo di connessione\n")
       conn.close(socket.SHUT_RDWR)
- 
+  
+  return 0
 
 
 # riceve esattamente n byte e li restituisce in un array di byte
@@ -123,49 +124,74 @@ def handler_A(conn, capolet_fd):
 
   #verifico che la stringa non superi la lunghezza massima
   assert strLen < Max_sequence_length, f"max sequence lenght: {Max_sequence_length}\nyour lenght: {strLen}"
+  
+  #se la stringa è vuota si skippa
+  if strLen < 0:
+    return 0
 
   #leggo strLen bytes, ovvero la stringa in ingresso
   data = recv_all(conn,strLen)
 
+  
+  #acquisizione del mutex per poter scrivere senza sovrapposizione sulla pipe
   #scrittura sulla Pipe mandando prima la dimensione della stringa e poi la stringa
+  
+  capolet_mutex.acquire()
+  
   if os.write(capolet_fd,struct.pack("<i",strLen)) < 0:
     print("errore scrittura lunghezza n")
   
   bytes_written = os.write(capolet_fd,data)
+
+  capolet_mutex.release()
   
   if bytes_written<0:
     print("errore scrittura dati\n")
 
   #scrittura sul file server.log le statistiche
   msgLog('A',bytes_written)
+
+  return 0
   
 
 
 def handler_B(conn, caposc_fd):
   #connessione B: deve scrivere sulla FIFO 'caposc'
-  print("connessione di tipo B")
-  bytes_written = 0
+
   #ad ogni ciclo leggiamo la lunghezza della stringa e poi la stringa
   #se la lunghezza è zero, sappiamo di dover smettere la lettura per questa connessione
   while(True):
+
+    bytes_written = 0
     #receving the lenght of the string
     data = recv_all(conn, 2)
     strLen = struct.unpack("!H",data)[0]
+
     assert strLen < Max_sequence_length, f"max sequence lenght: {Max_sequence_length}\nyour lenght: {strLen}"    
     #breaking condition
     if strLen == 0:
-      print("\n\t=== EOF ===")
       break
         
     #reading the incoming string 
-    print(f"dimensione della stringa: {strLen}\n")
-    data = recv_all(conn,strLen)
-    string = data.decode()
+    data = recv_all(conn,strLen) #stringa codificata
+    
+    #scrittura sulla fifo caposc acquisendo il mutex per una scrittura esclusiva, evitando sovrascrizioni fra i thread
+    caposc_mutex.acquire()
+    
+    if os.write(caposc_fd,struct.pack("<i",strLen)) == -1:
+      print("\n=== errore scrittura strLen ===\n")
+      exit(1)
+    bytes_written = os.write(caposc_fd,data) 
+    if bytes_written == -1:
+      print("\n===ERRORE===")
+      exit(1)
+    caposc_mutex.release()
+    
+    msgLog('B',bytes_written)
 
-    bytes_written += len(data)
-    print(f"\n\t=== in arrivo dal clientB la stringa: ===\n==={string}")
+  return 0
+ 
 
-  msgLog('B',bytes_written)
  
 #funzione usata nelle connessioni con i client per scrivere su server.log i messaggi di log
 def msgLog(connection_type,bytes_written):
