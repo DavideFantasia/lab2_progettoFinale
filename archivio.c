@@ -28,8 +28,11 @@ Oltre ai thread lettori e scrittori, il programma archivio deve avere:
 
 #include "xerrori.h"
 #include <arpa/inet.h>
+
 #define FILE_POSITION __LINE__,__FILE__
 #define MAX_SEQUENCE_LENGTH 2048
+#define PC_buffer_len 10 //lunghezza del buffer produttori/consumatori
+#define Num_elem 1000000 //dimensione della tabella hash
 
 int main(int argc, char *argv[]){
     printf("\n=== Avvio corretto dell'archivio ===\n");
@@ -39,35 +42,40 @@ int main(int argc, char *argv[]){
     printf("\n\targomenti in arrivo ad %s:\n\t -r: %d\t-w: %d\n",argv[0], atoi(argv[1]),atoi(argv[2]));
 
     int capolet_fd = open("./capolet",O_RDONLY);
-    if(capolet_fd<0) xtermina("errore in apertura pipe\n",FILE_POSITION);
+    int caposc_fd = open("./caposc",O_RDONLY);
+
+    if(capolet_fd<0) xtermina("errore apertura capolet\n",FILE_POSITION);
+    if(caposc_fd<0) xtermina("errore apertura caposc\n",FILE_POSITION);
 
     char readbuffer[MAX_SEQUENCE_LENGTH];
     int length;
     int e;
-
+    int i=0;
     //leggo dalla pipe
     while(true){
-        e = read(capolet_fd, &length, sizeof(int));
-
-        if(e < sizeof(int)){
+        
+        e = read(caposc_fd, &length, sizeof(int));
+        if(e == -1){
+            printf("\nERRNO: %d\n",errno);
             xtermina("lenght reading error\n",FILE_POSITION);
         }
 
-        printf("lunghezza: %d\n", length);
-
         if(length>MAX_SEQUENCE_LENGTH) xtermina("max sequence lenght error\n",FILE_POSITION);
-;       
-        e=read(capolet_fd, readbuffer, length);
+
+        e=read(caposc_fd, readbuffer, length);
+
         if(e<0){ 
             printf("errno: %d",errno);
             xtermina("read of string error\n",FILE_POSITION);
         }
-        printf("stringa: %s\n",readbuffer);
+        printf("=== ARCHIVIO ===\nstringa: %s\n",readbuffer);
         //cleanin the buffer
         memset(readbuffer,'\0',sizeof(readbuffer));
+
     }
 
-    xclose(capolet_fd,__LINE__,__FILE__);
+    xclose(capolet_fd,FILE_POSITION);
+    xclose(caposc_fd,FILE_POSITION);
     printf("\nLettura finita\n");
 
 
