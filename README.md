@@ -16,6 +16,16 @@ $ pkill -INT -f server.py       # invia SIGINT a server.py
                                 # che a sua volta termina archivio
 ```
 
-### TODO:
+1. lancio di archivio e creazione delle pipe: ✓
+2. comunicazione via pipe dal server: ✓
+3. cancellazione dei file caposc, capolet: ✓
+4. terminazione del server: ✓
 
-bisogna ancora implementare l'archivio e il sistema di comunicazione via pipe
+# TODO:
+
+### Archivio:
+1. Implementare il thread dei segnali, così da poter verificare il funzionamento dell'invio segnali dal server e poter concludere il server
+2. Implmentare il thread capo lettore
+3. Implementare il thread capo scrittore
+4. Implementazione hashmap
+
