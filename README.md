@@ -20,12 +20,16 @@ $ pkill -INT -f server.py       # invia SIGINT a server.py
 2. comunicazione via pipe dal server: ✓
 3. cancellazione dei file caposc, capolet: ✓
 4. terminazione del server: ✓
+5. Implementazione del thread dei segnali: ✓
+6. caposcrittore: ✓
+7. thread scrittori: ✓
+8. hashmap: ✓
 
 # TODO:
 
 ### Archivio:
-1. Implementare il thread dei segnali, così da poter verificare il funzionamento dell'invio segnali dal server e poter concludere il server
-2. Implmentare il thread capo lettore
-3. Implementare il thread capo scrittore
-4. Implementazione hashmap
+1. Fare multithreading dei thread scrittori
+2. Implementare il thread capo scrittore
+3. implementare i thread lettori
+
 
