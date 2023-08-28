@@ -25,7 +25,10 @@ char *read_buffer(pc_buffer_t *buffer){
             *(buffer->index)+= 1;
 
         xpthread_mutex_unlock(buffer->mutex,FILE_POSITION);
-    xsem_post(buffer->sem_free_slots,FILE_POSITION); 
+    xsem_post(buffer->sem_free_slots,FILE_POSITION);
+    if( strcmp( string , "EOF" ) == 0){
+        return NULL;
+    } //condizione in cui la FIFO ha chiuso la connessione con il master
     return string;
 }
 
@@ -53,4 +56,3 @@ ENTRY *EntryCreate(char *key, int value){
 void free_entry(ENTRY *entry){
     free(entry->key); free(entry->data); free(entry);
 }
-

@@ -30,6 +30,17 @@ typedef struct{
     sem_t *sem_data_items;  
 }pc_buffer_t;
 
+typedef struct master_arg_struct{
+    int pipe_fd; // the file descriptor of the pipe (capolet/caposc)
+    pc_buffer_t *pc_buffer;// producer/consumer buffer    
+}master_arg_t;
+
+typedef struct slave_arg_struct{
+    int pipe_fd; // the file descriptor of the pipe (capolet/caposc)
+    int lettori_log;
+    pc_buffer_t *pc_buffer;// producer/consumer buffer    
+}slave_arg_t;
+
 int pcBuffer_init(pc_buffer_t *buffer_notInit,int *index, pthread_mutex_t *buff_mutex, sem_t *sem_free_slots, sem_t *sem_data_items);
 
 char *read_buffer(pc_buffer_t *buffer);

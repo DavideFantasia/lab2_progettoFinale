@@ -30,7 +30,6 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
   #avvio del file archivio
   archivioString = ["./archivio", str(numLettori), str(numScrittori)]
   if withValgrind:
-    print("avvio con valgrind\n")
     archivioString = ["valgrind", "--leak-check=full", "--show-leak-kinds=all", "--log-file=valgrind-%p.log"] + archivioString
 
   archivioProcess = subprocess.Popen(archivioString)
@@ -60,7 +59,8 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
           executor.submit(connection_handler, conn,addr,capolet_fd,caposc_fd)
     except KeyboardInterrupt:
       pass
-    print('\n\t=== turning server off ===')
+
+    # fase di chiusura
 
     #closing the connection
     s.shutdown(socket.SHUT_RDWR)
@@ -73,10 +73,11 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
     os.unlink(caposc_path)
     os.unlink(capolet_path)
 
-    #closing the archive
-    archivioProcess.send_signal(signal.SIGTERM)
-
-    print('\n\t=== server off ===')
+    #closing the archive's process
+    #archivioProcess.send_signal(signal.SIGTERM)
+    
+    archivioProcess.terminate()
+    archivioProcess.wait()
 
     return 0
     
