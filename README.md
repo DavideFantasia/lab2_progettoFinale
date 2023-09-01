@@ -24,12 +24,13 @@ $ pkill -INT -f server.py       # invia SIGINT a server.py
 6. caposcrittore: ✓
 7. thread scrittori: ✓
 8. hashmap: ✓
+9. Fare multithreading dei thread scrittori: ✓
+10. Implementare il thread capo scrittore: ✓
+11. implementare i thread lettori: ✓
 
 # TODO:
 
 ### Archivio:
-1. Fare multithreading dei thread scrittori
-2. Implementare il thread capo scrittore
-3. implementare i thread lettori
+1.  pulizia dei blocchi di memoria
 
 
