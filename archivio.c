@@ -1,423 +1,367 @@
-#define _POSIX_C_SOURCE 200809L //per il  dprintf()
-#define _GNU_SOURCE
-#include <stdio.h>
-#include <search.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include <signal.h>
-#include <fcntl.h>
-#include <stdint.h>
-#include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#include <assert.h>
 #include "xerrori.h"
-#include <arpa/inet.h>
+#include "utility.h"
+
+//tutte le costanti e le struct sono definite nel file 'utility.h'
+
+void aggiungi(char *s);
+int conta(char *s);
+
+volatile sig_atomic_t distinct_strings = 0;
+pthread_mutex_t distinct_strings_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_mutex_t lettoriLog_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_mutex_t ht_mutex = PTHREAD_MUTEX_INITIALIZER; //mutex for the hashtable
 
 
-#define INITIAL_TABLE_SIZE 1000000
-#define PC_buffer_len 10
-int tot = 0; //parole distinte totali
-
-struct listaCircolare 
-{
-    pthread_mutex_t *lock; //lock per poter scrivere/leggere il buffer
-    pthread_cond_t *not_full;
-    pthread_cond_t *not_empty;
-    int *consumatore; //indice thread consumatori
-    int *produttore; //indice thread produttori
-    int *disponibili; //dati presenti sul buffer non ancora letti
-    char **array;
-};
-
-//termina un processo con eventuale messaggio d'errore
-void termina(const char *messaggio) 
-{
-  if(errno==0)  fprintf(stderr,"== %d == %s\n",getpid(), messaggio);
-  else fprintf(stderr,"== %d == %s: %s\n",getpid(), messaggio,
-              strerror(errno));
-  exit(1);
-}
-
-
-struct segnale
-{
-    sigset_t *segnali;
-    pthread_t *caposcrittore;
-    pthread_t *capolettore;
-};
-
-
-
-struct reader
-{
-    int *file_descriptor;
-    struct listaCircolare *bufferslave;
-};
-
-struct writer
-{
-    struct listaCircolare *bufferslave;
-};
-
-struct master
-{
-    struct listaCircolare *buffermaster;
-    char *name;
-};
-
-void distruggi_entry(ENTRY *e)
-{
-  free(e->key); 
-  free(e->data);
-  free(e);
-}
-
-
-// crea un oggetto di tipo entry
-// con chiave s e valore n
-ENTRY *crea_entry(char *stringa, int n)
-{
-  ENTRY *e = calloc(1, sizeof(ENTRY));
-  if(e==NULL) termina("errore creazione");
-  e->data = (int *) calloc(1, sizeof(int)); //casto ad intero il puntatotore che mi indica dove trovo la memoria allocata (di dimensione di un intero), così posso manipolare il valore al suo interno
-  e->key = strdup(stringa); //alloca automaticamente la memoria necessaria per la nuova stringa, evitando la necessità di allocare manualmente la memoria utilizzando malloc e copiare la stringa con strcpy.
-  if(e->key==NULL || e->data==NULL) termina("errore malloc");
-  *((int *)e->data) = n;
-  return e;
-}
-
-
-void aggiungi(char *s)
-{
-    ENTRY *e = crea_entry(s, 1);
-    ENTRY *presente = hsearch(*e, FIND);
-    if (presente == NULL)
-    {
-        presente = hsearch(*e,ENTER);
-        if(presente==NULL) termina("tabella piena o errore");
-        tot ++; //aumento il contatore globale
-    }
-    else
-    {
-        assert(strcmp(e->key,presente->key)==0);
-        int *n = (int *)presente->data;
-        *n += 1; //aumenta il contatore interno della entry
-        distruggi_entry(e); //non la devo memorizzare
-    }
-}
-
-
-int conta(char *s)
-{ 
-    ENTRY *e = crea_entry(s, 1);
-    ENTRY *r = hsearch(*e,FIND);
-    distruggi_entry(e);
-    if(r==NULL) return 0; // se la stringa cercata non è presente 
-    else return *((int *)r->data);
-}
-
-
-void *lettore(void *arg)
-{
-    struct reader *argv = (struct reader *)arg; //passo il puntatore alla struttura
-    struct listaCircolare *buf = (argv->bufferslave);
-    int *log_fd = (argv->file_descriptor);
-    while (1) 
-    {
-        pthread_mutex_lock(buf->lock); //prende la lock
-        while (*(buf->disponibili )== 0)
-        {   
-            pthread_cond_wait(buf->not_empty, buf->lock); //se non ho inserito elementi sul buffer, aspetto di ricevere not_empty
-        }        
-        char *str  = buf->array[*(buf->consumatore)];
-        if(str == NULL) //devo terminare
-        {
-            pthread_cond_signal(buf->not_empty); //sveglia un altro thread lettore
-            pthread_mutex_unlock(buf->lock);
-            break;
-        } 
-        dprintf(*log_fd, "%s %d\n", str, conta(str)); //scrivo sul file di log degli scrittori
-        buf->array[*(buf->consumatore)] = NULL; // Imposta l'elemento dell'array a NULL per indicare che non è più valido
-        free(str);
-        *(buf->consumatore)= *(buf->consumatore)+1;
-        *(buf->disponibili) = *(buf->disponibili)-1; //Un elemento in meno da leggere
-        if (*(buf->consumatore) > 9) *(buf->consumatore)= 0;
-        pthread_cond_signal(buf->not_full); //Viene inviato un segnale al thread produttore
-        pthread_mutex_unlock(buf->lock); //lascia la lock
-    }
-    return NULL;
-}
-
-
-void *scrittore(void *arg)
-{
-    struct writer *argv = (struct writer *)arg; //passo il puntatore alla struttura
-    struct listaCircolare *buf = (argv->bufferslave);
-    while (1)
-    {
-        pthread_mutex_lock(buf->lock); //prende la lock
-        while (*(buf->disponibili )== 0 ) 
-        {
-            pthread_cond_wait(buf->not_empty, buf->lock); //se non sono stati inseriti elementi sul buffer, aspetta di ricevere not_empty
-        }
-        char *str  = buf->array[*(buf->consumatore)];
-        if(str == NULL)
-        {
-            pthread_cond_signal(buf->not_empty); //sveglia un altro thread scrittore
-            pthread_mutex_unlock(buf->lock);
-            break;
-        } 
-        aggiungi(str);
-        buf->array[*(buf->consumatore)] = NULL; // Imposta l'elemento dell'array a NULL per indicare che non è più valido
-        free(str);
-        *(buf->consumatore)= *(buf->consumatore)+1 ;
-        *(buf->disponibili) = *(buf->disponibili)-1;
-        if (*(buf->consumatore) > 9) *(buf->consumatore)= 0;
-        pthread_cond_signal(buf->not_full);
-        pthread_mutex_unlock(buf->lock);
-    }
-    return NULL;
-}
-
-
-void *capo(void *arg)
-{
-    struct master *argv = (struct master *)arg; //passo il puntatore alla struttura
-    char *file = argv->name;
-    struct listaCircolare *buf = (argv->buffermaster);
-    int pipe;
-    pipe = open(file, O_RDONLY); //apre la pipe
-    if (pipe == -1) {
-        perror("Errore nell'apertura della pipe");
-        exit (1);
-    }
-    char b_letti[2048];
-    int n = 0;
-    int leggo=0;
-    while((n =read(pipe, b_letti, sizeof(uint16_t))) > 0)
-    {
-        uint16_t lunghezza;
-        memcpy(&lunghezza, b_letti, sizeof(uint16_t)); //nei primi due byte metto la lunghezza
-        if (ntohs(lunghezza) > 2048)  break;
-        leggo = read(pipe, b_letti,  ntohs(lunghezza)); //leggo nbytes dalla pipe 
-        if (leggo ==1) continue; //non c'è nulla da scrivere
-        if (leggo <= 0) break; //ho finito di leggere
-        char *copia;
-        copia = calloc((lunghezza +1) , sizeof(char));
-        if (!copia) break ;// Errore: memoria insufficiente
-        memcpy(copia, b_letti, ntohs(lunghezza)); 
-        copia[lunghezza] = '\0'; 
-        char *token = NULL;
-        char *saveptr = NULL;
-        token = strtok_r(copia, ".,:; \n\r\t", &saveptr); //Inizia a tokenizzare la riga ricevuta
-        while(token != NULL)
-        {
-            pthread_mutex_lock(buf->lock); 
-            while(*(buf->disponibili) == 10) 
-            {
-                pthread_cond_wait(buf->not_full, buf->lock);
-            }
-            char *copia = strdup(token);
-            buf->array[*(buf->produttore)] = copia; //inserisco nel buffer
-            token = strtok_r(NULL, ".,:; \n\r\t", &saveptr);
-            *(buf->produttore)= *(buf->produttore)+1;
-            *(buf->disponibili) = *(buf->disponibili)+1;
-            if (*(buf->produttore) > 9) *(buf->produttore)= 0;
-            pthread_cond_signal(buf->not_empty);
-            pthread_mutex_unlock(buf->lock);  
-        }
-        token=NULL;
-        free(copia);
-        memset(b_letti, '\0', sizeof(b_letti));
-    }
-    pthread_mutex_lock(buf->lock);  
-    for(int i = 0; i<10; i++)
-    {
-        buf->array[i] = NULL; //Avverte i thread consumatori di finire
-    }
-    *(buf->disponibili) = 10;
-    pthread_cond_signal(buf->not_empty);
-    pthread_mutex_unlock(buf->lock);  
-    close(pipe); //chiudo la pipe
-    return NULL;
-}
-
-
-void *signal_handler(void *arg)
-{
-    struct segnale *argv = (struct segnale *)arg;
-    sigset_t *set = (sigset_t *)argv->segnali;
-    int sig;
-    pthread_t *caposcrittore = argv->caposcrittore;
-    pthread_t *capolettore = argv->capolettore;
-    while (1)
-    {
-        sigwait(set, &sig);
-        if (sig == SIGINT)
-        {
-            fprintf(stderr, "Segnale SIGINT -> Stringhe distinte nella tabella hash: %d\n", tot);
-        }
-        else if (sig == SIGTERM)
-        {
-            //join capo lettore e join caposcrittore
-            pthread_join(*capolettore, NULL);
-            pthread_join(*caposcrittore, NULL);
-            fprintf(stdout, "Segnale SIGTERM -> Stringhe distinte nella tabella hash: %d\n", tot);
-            break;
-        }
-    }
-    return NULL;
-}
-
-
-int main(int argc, char *argv[])
-{
-    if (argc < 3)
-    {
-        printf("Uso: %s <num_scrittori> <num_lettori>", argv[0]);
-        return 1;
-    }
-    //Inizializzo 
-    int num_writers = atoi(argv[1]);
-    int num_readers = atoi(argv[2]);
-    pthread_mutex_t msc= PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_t mlett = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t nfl = PTHREAD_COND_INITIALIZER;
-    pthread_cond_t nel = PTHREAD_COND_INITIALIZER;
-    pthread_cond_t nfs = PTHREAD_COND_INITIALIZER;
-    pthread_cond_t nes = PTHREAD_COND_INITIALIZER;
-    char **Buflett = (char **)calloc(10, sizeof(char *));
-    char **Bufsc = (char **)calloc(10, sizeof(char *));
-    int disp_lett = 0;
-    int disp_sc = 0; 
-    int ind_con_lett=0, ind_prod_lett=0, ind_con_sc=0, ind_prod_sc = 0; 
-    //Creo le due liste circolari per le comunicazioni tra i vari thread
-    struct listaCircolare bufsc;
-    struct listaCircolare buflet;
-
-    buflet.consumatore= &ind_con_lett ;
-    buflet.produttore=&ind_prod_lett;
-    bufsc.consumatore=&ind_con_sc;
-    bufsc.produttore=&ind_prod_sc;
-    bufsc.array = Bufsc;
-    buflet.array =  Buflett;
-    buflet.disponibili = &disp_lett;
-    bufsc.disponibili = &disp_sc;
-    buflet.lock = &mlett;
-    bufsc.lock = &msc;
-    buflet.not_empty = &nel;
-    buflet.not_full = &nfl;
-    bufsc.not_empty = &nes;
-    bufsc.not_full = &nfs;
-    //Dichiaro i thread e le rispettive strutture
-    pthread_t caposcrittore;
-    pthread_t capolettore;
-    pthread_t signal_t;
-    pthread_t scrittori[num_writers];
-    pthread_t lettori[num_readers];
-    sigset_t segnali;
-    struct reader reader_arr;
-    struct writer writer_arr;
-    struct master cwriter;
-    struct master creader;
-    int file_descriptor = open("lettori.log", O_WRONLY | O_CREAT | O_APPEND, 0644); //apro il file in scrittura, se non esiste lo creo con i permessi(nel caso dovessi creare il file) owner e gruppo può scrivere/leggere gli altri solo leggere (-rw-rw-r--)
-
-    if (file_descriptor == -1) exit(1);
+void *signal_thread_body(void *voidArg){
     
-  
-    reader_arr.file_descriptor = &file_descriptor;
-    reader_arr.bufferslave = &buflet;
+    signal_arg_t *arg = (signal_arg_t *)voidArg;
 
-    writer_arr.bufferslave = &bufsc;
+    sigset_t mask;
+    sigfillset(&mask);
 
-    cwriter.buffermaster = &bufsc;
-    cwriter.name = "caposc";
+    int sigNum;
 
-    creader.buffermaster = &buflet;
-    creader.name = "capolet";
+    while(1) {
 
-    int numero_elementi = INITIAL_TABLE_SIZE;
-    int esito = hcreate(numero_elementi);
-    if(esito==0 ) termina("Errore creazione HT");
-    //Inizializzo un set di segnali
-    sigemptyset(&segnali);
-    sigaddset(&segnali, SIGTERM);
-    sigaddset(&segnali, SIGINT);
-    struct segnale seg;
-    seg.segnali = &segnali;
-    seg.capolettore = &capolettore;
-    seg.caposcrittore = &caposcrittore;
-    //creo i vari thread
-    if (pthread_sigmask(SIG_BLOCK, &segnali, NULL) != 0) //imposto una maschera dei segnali per catturare i segnali specificati nella variabile "segnali"
-    {
-        perror("Errore thread segnali");
-        exit(1);
-    }
+        int e = sigwait(&mask,&sigNum);
+        if(e!=0) xtermina("Errore sigwait",FILE_POSITION);
 
-    if (pthread_create(&signal_t, NULL, signal_handler, (void *)&seg) != 0) // Creazione del signal handler
-    {
-        perror("Errore nella creazione del thread dei segnali");
-        exit(1);
-    }
+        if( sigNum == SIGTERM ){
+            xpthread_join(*(arg->masterWriter_thread),NULL,FILE_POSITION);
+            xpthread_join(*(arg->masterReader_thread),NULL,FILE_POSITION);
 
+            fprintf(stdout,"\nnella tabella hash ci sono %d stringhe distinte\n",distinct_strings);
+            
+            hdestroy();
 
-    if (pthread_create(&capolettore, NULL, capo, (void*)&creader) != 0) //creazione capo lettore
-    {
-        perror("Errore nella creazione del thread capolettore");
-        exit(1);
-    }
-
-    if ( pthread_create(&caposcrittore, NULL, capo, (void*)&cwriter)!= 0) //creazione capo scrittore
-    {
-        perror("Errore nella creazione del thread caposcrittore");
-        exit(1);
-    }
-
-    for (int i = 0 ; i < num_writers; i++) 
-    {
-        if(pthread_create(&scrittori[i], NULL, &scrittore, &writer_arr) != 0)
-        { 
-            perror("errore creazione scrittori");
+            pthread_exit(NULL);
+        }else if( sigNum == SIGINT ){
+            fprintf(stderr,"\nnella tabella hash ci sono %d stringhe distinte\n",distinct_strings);
         }
+    }
+}
+
+void *Master_body(void *voidArg){
+
+    master_arg_t *arg = (master_arg_t *)voidArg;
+    pc_buffer_t *producer_buffer = arg->pc_buffer;
+    
+    int strLen=1;
+    char str[MAX_SEQUENCE_LENGTH];
+    char *token;
+    int errCode=1;
+
+    //qua non c'è bisogno di accesso esclusivo alla FIFO inquanto già garantito, essendo questo l'unico thread che va a leggervi
+    while(errCode > 0){
+
+        errCode = read(arg->pipe_fd,&strLen,sizeof(int)); //lettura lunghezza stringa
+        if( errCode == -1) xtermina("\n === Read Error ===\n",FILE_POSITION);
+        assert(strLen < MAX_SEQUENCE_LENGTH);
+
+        errCode = read(arg->pipe_fd,str,strLen);
+        if( errCode == -1) xtermina("\n === Read Error ===\n",FILE_POSITION);
+
+        // ##################### tokenizzazione della stringa letta ############################
+        
+        str[strLen] = '\0';
+        char *remaining = str; //string ptr for reentrance
+
+        while( (token = strtok_r(remaining, ".,:; \n\r\t", &remaining)) != NULL){
+            // invio della copia del token sul buffer produttore/consumatore
+            if (write_buffer(producer_buffer,token) != 0 ) 
+                xtermina("errore scrittura su buffer",FILE_POSITION);
+        }
+        memset(str,'\0',sizeof(str)); //pulizia stringa
+    }
+    
+    //pulizia buffer per dire ai thread scrittori che si ha finito la lettura
+    int e;
+
+    for(int i=0; i<PC_buffer_len; i++){
+        e = write_buffer(producer_buffer,"EOF");
+        if(e != 0) xtermina("errore scrittura buffer: EOF\n",FILE_POSITION);
+    }
+    
+    pthread_exit(NULL);
+}
+
+void *SlaveWriter_body(void *voidArg){
+
+    master_arg_t *arg = (master_arg_t *)voidArg;
+    
+    pc_buffer_t *consumer_buffer = arg->pc_buffer;
+    if(consumer_buffer == NULL) xtermina("\n--- buffer creation error ---\n",FILE_POSITION);
+    
+    //termino quando incontro stringhe vuote
+    while(1){
+        char *token = read_buffer(consumer_buffer);
+        
+        if(strcmp(token, "EOF") == 0) break;
+        if(token == NULL) break;
+
+        aggiungi(token);
+        
+        free(token); //pulizia stringa
+    }
+    pthread_exit(NULL);
+}
+
+void *SlaveReader_body(void *voidArg){
+    
+    slave_arg_t *arg = (slave_arg_t *)voidArg;
+    
+    pc_buffer_t *consumer_buffer = arg->pc_buffer;
+    if(consumer_buffer == NULL) xtermina("\n--- buffer creation error ---\n",FILE_POSITION);
+
+    int occurrences=0;
+    int err;
+
+    //termino quando incontro stringhe vuote
+    while(1){
+        char *printMessage;
+        char *token = read_buffer(consumer_buffer);
+        
+        if(strcmp(token, "EOF") == 0) break;        
+        if(token == NULL ) break;
+        
+        occurrences = conta(token);
+        xpthread_mutex_lock(&lettoriLog_mutex,FILE_POSITION);
+            err = asprintf(&printMessage,"%s %d\n",token,occurrences);
+            err = write(arg->lettori_log,printMessage,strlen(printMessage));
+        xpthread_mutex_unlock(&lettoriLog_mutex,FILE_POSITION);
+
+        if(err != strlen(printMessage)){
+            xtermina("errore write",FILE_POSITION);
+        }
+        
+        free(token);
+        free(printMessage);
+    }
+    pthread_exit(NULL);
+}
+
+int main(int argc, char *argv[]){
+
+    if(argc != 3) xtermina("insufficient argument's numbers\n",FILE_POSITION);
+    int r_num = atoi(argv[1]);
+    int w_num = atoi(argv[2]);
+
+    assert(r_num > 0);
+    assert(w_num > 0);
+    
+    //blocco tutti i segnali del thread attuale in modo che sia solo il thread dei segnali a gestirli
+    //tutti i thread creati dal main erediteranno questa sigmask
+    sigset_t mask;
+    sigfillset(&mask);
+    pthread_sigmask(SIG_BLOCK, &mask , NULL);
+
+    //creazione e avvio del thread dei segnali con argomenti i thread capolet/caposc
+    pthread_t signal_thread;
+    pthread_t masterWriter_thread;
+    pthread_t masterReader_thread;
+
+    signal_arg_t signal_arg;
+    signal_arg.masterWriter_thread = &masterWriter_thread;
+    signal_arg.masterReader_thread = &masterReader_thread;
+
+
+    xpthread_create(&signal_thread,NULL,&signal_thread_body,&signal_arg,FILE_POSITION);
+
+    int capolet_fd = open("capolet",O_RDONLY);
+    int caposc_fd = open("caposc",O_RDONLY);
+
+    int lettori_log_fd = open("lettori.log",(O_WRONLY | O_CREAT | O_TRUNC),0666);
+    
+    //creazione della tabella hash
+    int HashTable = hcreate(Num_elem);
+    if(HashTable == 0)  xtermina("\n=== hashtable: creation error ===\n",FILE_POSITION);
+
+    // ################################################################
+    // ########################## CAPOSC ##############################
+    //#################################################################
+    // inizializzazione buffer prod cons (scrittore)
+    
+    pc_buffer_t caposc_buffer;
+    pthread_mutex_t pc_writer_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+    sem_t free_slot_writer;
+    xsem_init(&free_slot_writer, 0,PC_buffer_len, FILE_POSITION);
+
+    sem_t data_slot_writer;
+    xsem_init(&data_slot_writer, 0,0, FILE_POSITION);
+
+    int writer_p_index = 0;
+    
+    //alloco PC_buffer_len elementi di tipo char* (stringhe)
+    caposc_buffer.buffer = (char**)malloc(sizeof(char *) * PC_buffer_len);
+    if(caposc_buffer.buffer == NULL) xtermina("errore malloc",FILE_POSITION);
+
+    int err = pcBuffer_init(&caposc_buffer,&writer_p_index,&pc_writer_mutex,&free_slot_writer,&data_slot_writer);
+    if( err != 0 ) xtermina("errore generazione buffer",FILE_POSITION);
+
+    master_arg_t masterWriter_arg;
+    masterWriter_arg.pipe_fd = caposc_fd;
+    masterWriter_arg.pc_buffer = &caposc_buffer;
+    
+
+    //############### slave writer ################
+    pc_buffer_t writer_buffer;   
+    int writer_c_index = 0;
+
+    writer_buffer.buffer = caposc_buffer.buffer; //gli slave dovranno avere lo stesso buffer del master
+    err = pcBuffer_init(&writer_buffer,&writer_c_index,&pc_writer_mutex,&free_slot_writer,&data_slot_writer);
+    if( err != 0 ) xtermina("errore generazione buffer",FILE_POSITION);
+
+    master_arg_t slaveWriter_arg;
+    slaveWriter_arg.pipe_fd = caposc_fd;
+    slaveWriter_arg.pc_buffer = &writer_buffer;
+
+    //################################################################
+
+    //inizializzazione thread caposcrittore e scrittore
+    xpthread_create(&masterWriter_thread,NULL,&Master_body,&masterWriter_arg, FILE_POSITION);
+
+    //pthread_t slaveWriter_thread;
+    pthread_t slaveWriters_threads[w_num];
+
+    for(int i=0; i<w_num; i++){
+        xpthread_create(&slaveWriters_threads[i],NULL, &SlaveWriter_body, &slaveWriter_arg, FILE_POSITION);
+    }
+
+    //#################################################################################
+    //################################# capolet #######################################
+    //#################################################################################
+    
+    //inizializzazione buffer
+
+    pc_buffer_t capolet_buffer;
+    pthread_mutex_t pc_reader_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+    sem_t free_slot_reader;
+    xsem_init(&free_slot_reader, 0,PC_buffer_len, FILE_POSITION);
+
+    sem_t data_slot_reader;
+    xsem_init(&data_slot_reader, 0,0, FILE_POSITION);
+
+    int reader_p_index = 0;
+    
+    //alloco PC_buffer_len elementi di tipo char* (stringhe)
+    capolet_buffer.buffer = (char**)malloc(sizeof(char *) * PC_buffer_len);
+    if(capolet_buffer.buffer == NULL) xtermina("errore malloc",FILE_POSITION);
+
+    err = pcBuffer_init(&capolet_buffer,&reader_p_index,&pc_reader_mutex,&free_slot_reader,&data_slot_reader);
+    if( err != 0 ) xtermina("errore generazione buffer",FILE_POSITION);
+
+    //inizializzazione dell'argomento da passare al thread master
+    master_arg_t masterReader_arg;
+    masterReader_arg.pc_buffer = &capolet_buffer;
+    masterReader_arg.pipe_fd = capolet_fd;
+
+    //############### slave reader ################
+    pc_buffer_t reader_buffer;   
+    int reader_c_index = 0;
+
+    reader_buffer.buffer = capolet_buffer.buffer; //gli slave dovranno avere lo stesso buffer del master
+    err = pcBuffer_init(&reader_buffer,&reader_c_index,&pc_reader_mutex,&free_slot_reader,&data_slot_reader);
+    if( err != 0 ) xtermina("errore generazione buffer",FILE_POSITION);
+
+    slave_arg_t slaveReader_arg;
+    slaveReader_arg.pipe_fd = capolet_fd;
+    slaveReader_arg.lettori_log = lettori_log_fd;
+    slaveReader_arg.pc_buffer = &reader_buffer;
+
+    //inizializzazione thread capolettore e lettore
+    xpthread_create(&masterReader_thread,NULL,&Master_body,&masterReader_arg, FILE_POSITION);
+
+    pthread_t slaveReaders_threads[r_num];
+
+    for(int i=0; i<r_num; i++){
+        xpthread_create(&slaveReaders_threads[i],NULL, &SlaveReader_body, &slaveReader_arg, FILE_POSITION);
+    }
+
+    //###################################################################    
+    //##################### fase di chiusura ############################
+    //###################################################################    
+    
+    for(int i=0; i<w_num; i++){
+        xpthread_join(slaveWriters_threads[i],NULL,FILE_POSITION);
+    }
+    for( int i=0; i<r_num; i++){
+        xpthread_join(slaveReaders_threads[i],NULL,FILE_POSITION);
+    }
+    
+    xpthread_join(signal_thread,NULL,FILE_POSITION);
+    
+    //##################### pulizia ############################
+    xclose(capolet_fd,FILE_POSITION);
+    xclose(caposc_fd,FILE_POSITION);
+    xclose(lettori_log_fd,FILE_POSITION);
+
+    //pulizia del buffer
+    for(int i=PC_buffer_len-1; i>0; i--){
+        free(caposc_buffer.buffer[i]);
+        free(capolet_buffer.buffer[i]);
+    }
+    free(caposc_buffer.buffer);
+    free(capolet_buffer.buffer);
+
+    xsem_destroy(&free_slot_writer,FILE_POSITION);
+    xsem_destroy(&data_slot_writer,FILE_POSITION);
+
+    xsem_destroy(&free_slot_reader,FILE_POSITION);
+    xsem_destroy(&data_slot_reader,FILE_POSITION);
+
+    //essendo tutti i mutex inizializzati con PTHREAD_MUTEX_INITIALIZER non è necessario liberare la memoria manualmente
+    return 0;
+}
+
+void aggiungi(char *s){
+    if(s == NULL || (strcmp(s,"")==0 || strcmp(s," ")==0)) return;
+
+    ENTRY *element_to_search = EntryCreate(s,1);
+    xpthread_mutex_lock(&ht_mutex,FILE_POSITION);
+        ENTRY *searchResult = hsearch(*element_to_search, FIND);
+    xpthread_mutex_unlock(&ht_mutex,FILE_POSITION);
+
+    if(searchResult == NULL){ //se la ricerca non da alcun risultato
+        xpthread_mutex_lock(&ht_mutex,FILE_POSITION);
+            searchResult = hsearch(*element_to_search, ENTER); //inseriamo l'elemento che stavamo cercando
+        xpthread_mutex_unlock(&ht_mutex,FILE_POSITION);
+
+        xpthread_mutex_lock(&distinct_strings_mutex,FILE_POSITION);
+            if(searchResult != NULL) distinct_strings ++; //incremento il contatore di stringhe distinte presenti nella hashmap
+        xpthread_mutex_unlock(&distinct_strings_mutex,FILE_POSITION);
+        
+    }else{
+        assert(strcmp(element_to_search->key,searchResult->key)==0);
+        xpthread_mutex_lock(&ht_mutex,FILE_POSITION);
+            int *data = (int *) searchResult->data;
+            *data +=1;
+        xpthread_mutex_unlock(&ht_mutex,FILE_POSITION);
+        free_entry(element_to_search); // questa non la devo memorizzare
     }   
+    return;
+}
+
+int conta(char *s){
+    ENTRY *entry_to_search = EntryCreate(s,1);
+    int retVal = 0;
+
+    xpthread_mutex_lock(&ht_mutex,FILE_POSITION);
+        ENTRY *search_result = hsearch(*entry_to_search,FIND);
+    xpthread_mutex_unlock(&ht_mutex,FILE_POSITION);
     
-
-    for (int i = 0 ; i < num_readers; i++) 
-    {
-        if(pthread_create(&lettori[i], NULL, &lettore, &reader_arr) != 0)
-        {
-            perror("errore creazione lettori");
-        }
+    if(search_result == NULL){
+        free_entry(entry_to_search);
+        return 0; //se la entry non è presente
+    }else{
+        xpthread_mutex_lock(&ht_mutex,FILE_POSITION);
+            assert( strcmp(entry_to_search->key, search_result->key) == 0); //verifico che i nomi combacino
+            retVal = *((int *) search_result->data);
+        xpthread_mutex_unlock(&ht_mutex,FILE_POSITION);
+        free_entry(entry_to_search);
+        return retVal; //returno il valore associato all'indirizzo data (castato da void* a int*)
     }
-
-    //inizio le join 
-    //join dei lettori
-    for (int i = 0; i < num_readers; i++)
-    {
-        pthread_join(lettori[i], NULL);
-    }
-    //join degli scrittori
-    for (int i = 0; i < num_writers; i++)
-    {
-        pthread_join(scrittori[i], NULL);
-    }
-
-    //join thread segnali
-    pthread_join(signal_t, NULL);
-
-    //distruggo i vari mutex
-    pthread_mutex_destroy(&msc);
-    pthread_mutex_destroy(&mlett);
-    pthread_cond_destroy(&nfl);
-    pthread_cond_destroy(&nel);
-    pthread_cond_destroy(&nfs);
-    pthread_cond_destroy(&nes);
-
-    free(Buflett);
-    free(Bufsc);
-
-    //distruggo la tabella hash
-    hdestroy();
-    return 1;
 }
