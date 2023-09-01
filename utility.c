@@ -26,9 +26,7 @@ char *read_buffer(pc_buffer_t *buffer){
 
         xpthread_mutex_unlock(buffer->mutex,FILE_POSITION);
     xsem_post(buffer->sem_free_slots,FILE_POSITION);
-    if( strcmp( string , "EOF" ) == 0){
-        return NULL;
-    } //condizione in cui la FIFO ha chiuso la connessione con il master
+    //printf(" returning %s\n", string);
     return string;
 }
 

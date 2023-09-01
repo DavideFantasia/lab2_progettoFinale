@@ -7,44 +7,43 @@ void aggiungi(char *s);
 int conta(char *s);
 
 volatile sig_atomic_t distinct_strings = 0;
-pthread_mutex_t printing_mutex = PTHREAD_MUTEX_INITIALIZER; //mutex for printing
+pthread_mutex_t distinct_strings_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 pthread_mutex_t lettoriLog_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 pthread_mutex_t ht_mutex = PTHREAD_MUTEX_INITIALIZER; //mutex for the hashtable
 
 
-void *signal_thread_body(){
+void *signal_thread_body(void *voidArg){
+    
+    signal_arg_t *arg = (signal_arg_t *)voidArg;
+
     sigset_t mask;
     sigfillset(&mask);
-    pthread_sigmask(SIG_SETMASK, &mask , NULL); //apertura della mask dei segnali a tutti i segnali
 
     int sigNum;
 
-    while(true) {
-        int e = sigwait(&mask,&sigNum);
-        if(e!=0) perror("Errore sigwait");
+    while(1) {
 
-        if( sigNum == SIGINT ){
-            xpthread_mutex_lock(&printing_mutex,FILE_POSITION);
-                fprintf(stderr,"\nnella tabella hash ci sono %d stringhe distinte\n",distinct_strings);
-            xpthread_mutex_unlock(&printing_mutex,FILE_POSITION);
-        }
+        int e = sigwait(&mask,&sigNum);
+        if(e!=0) xtermina("Errore sigwait",FILE_POSITION);
+
         if( sigNum == SIGTERM ){
-            xpthread_mutex_lock(&printing_mutex,FILE_POSITION);
-                printf("\nnella tabella hash ci sono %d stringhe distinte\n",distinct_strings);
-            xpthread_mutex_unlock(&printing_mutex,FILE_POSITION);
-            fflush(stdout);
+            xpthread_join(*(arg->masterWriter_thread),NULL,FILE_POSITION);
+            xpthread_join(*(arg->masterReader_thread),NULL,FILE_POSITION);
+
+            fprintf(stdout,"\nnella tabella hash ci sono %d stringhe distinte\n",distinct_strings);
+            
+            hdestroy();
+
             pthread_exit(NULL);
+        }else if( sigNum == SIGINT ){
+            fprintf(stderr,"\nnella tabella hash ci sono %d stringhe distinte\n",distinct_strings);
         }
     }
 }
 
 void *Master_body(void *voidArg){
-    
-    //blocco tutti i segnali del thread attuale in modo che sia solo il thread dei segnali a gestirli
-    sigset_t mask;
-    sigfillset(&mask);
-    pthread_sigmask(SIG_BLOCK, &mask , NULL);
 
     master_arg_t *arg = (master_arg_t *)voidArg;
     pc_buffer_t *producer_buffer = arg->pc_buffer;
@@ -78,19 +77,16 @@ void *Master_body(void *voidArg){
     }
     
     //pulizia buffer per dire ai thread scrittori che si ha finito la lettura
+    int e;
     for(int i=0; i<PC_buffer_len; i++){
-        write_buffer(producer_buffer,"EOF");
+        e = write_buffer(producer_buffer,"EOF");
+        if(e != 0) xtermina("errore scrittura buffer: EOF\n",FILE_POSITION);
     }
-    free(token);
+    
     pthread_exit(NULL);
 }
 
 void *SlaveWriter_body(void *voidArg){
-
-    //blocco tutti i segnali del thread attuale in modo che sia solo il thread dei segnali a gestirli
-    sigset_t mask;
-    sigfillset(&mask);
-    pthread_sigmask(SIG_BLOCK, &mask , NULL);
 
     master_arg_t *arg = (master_arg_t *)voidArg;
     
@@ -100,25 +96,21 @@ void *SlaveWriter_body(void *voidArg){
     char *token;
     
     //termino quando incontro stringhe vuote
-    while(true){
+    while(1){
         char *token = read_buffer(consumer_buffer);
         
         if(strcmp(token, "EOF") == 0) break;
-        
-        if(token != NULL ) aggiungi(token);
+        if(token == NULL) break;
+
+        aggiungi(token);
 
         memset(token,'\0',sizeof(token)); //pulizia stringa
     }
-    
     pthread_exit(NULL);
 }
 
 void *SlaveReader_body(void *voidArg){
-    //blocco tutti i segnali del thread attuale in modo che sia solo il thread dei segnali a gestirli
-    sigset_t mask;
-    sigfillset(&mask);
-    pthread_sigmask(SIG_BLOCK, &mask , NULL);
-
+    
     slave_arg_t *arg = (slave_arg_t *)voidArg;
     
     pc_buffer_t *consumer_buffer = arg->pc_buffer;
@@ -129,11 +121,10 @@ void *SlaveReader_body(void *voidArg){
     char *printMessage;
     
     //termino quando incontro stringhe vuote
-    while(true){
+    while(1){
         char *token = read_buffer(consumer_buffer);
         
-        if(strcmp(token, "EOF") == 0) break;
-        
+        if(strcmp(token, "EOF") == 0) break;        
         if(token == NULL ) break;
         
         occurrences = conta(token);
@@ -149,7 +140,6 @@ void *SlaveReader_body(void *voidArg){
 
         memset(token,'\0',sizeof(token)); //pulizia stringa
     }
-    
     pthread_exit(NULL);
 }
 
@@ -159,6 +149,27 @@ int main(int argc, char *argv[]){
     int r_num = atoi(argv[1]);
     int w_num = atoi(argv[2]);
 
+    assert(r_num > 0);
+    assert(w_num > 0);
+    
+    //blocco tutti i segnali del thread attuale in modo che sia solo il thread dei segnali a gestirli
+    //tutti i thread creati dal main erediteranno questa sigmask
+    sigset_t mask;
+    sigfillset(&mask);
+    pthread_sigmask(SIG_BLOCK, &mask , NULL);
+
+    //creazione e avvio del thread dei segnali con argomenti i thread capolet/caposc
+    pthread_t signal_thread;
+    pthread_t masterWriter_thread;
+    pthread_t masterReader_thread;
+
+    signal_arg_t signal_arg;
+    signal_arg.masterWriter_thread = &masterWriter_thread;
+    signal_arg.masterReader_thread = &masterReader_thread;
+
+
+    xpthread_create(&signal_thread,NULL,&signal_thread_body,&signal_arg,FILE_POSITION);
+
     int capolet_fd = open("capolet",O_RDONLY);
     int caposc_fd = open("caposc",O_RDONLY);
 
@@ -167,15 +178,6 @@ int main(int argc, char *argv[]){
     //creazione della tabella hash
     int HashTable = hcreate(Num_elem);
     if(HashTable == 0)  xtermina("\n=== hashtable: creation error ===\n",FILE_POSITION);
-
-    //blocco tutti i segnali del thread attuale in modo che sia solo il thread dei segnali a gestirli
-    sigset_t mask;
-    sigfillset(&mask);
-    pthread_sigmask(SIG_BLOCK, &mask , NULL);
-
-    //creazione e avvio del thread dei segnali
-    pthread_t signal_thread;
-    xpthread_create(&signal_thread,NULL,&signal_thread_body,NULL,FILE_POSITION);
 
     // ################################################################
     // ########################## CAPOSC ##############################
@@ -220,7 +222,6 @@ int main(int argc, char *argv[]){
     //################################################################
 
     //inizializzazione thread caposcrittore e scrittore
-    pthread_t masterWriter_thread;
     xpthread_create(&masterWriter_thread,NULL,&Master_body,&masterWriter_arg, FILE_POSITION);
 
     //pthread_t slaveWriter_thread;
@@ -273,7 +274,6 @@ int main(int argc, char *argv[]){
     slaveReader_arg.pc_buffer = &reader_buffer;
 
     //inizializzazione thread capolettore e lettore
-    pthread_t masterReader_thread;
     xpthread_create(&masterReader_thread,NULL,&Master_body,&masterReader_arg, FILE_POSITION);
 
     pthread_t slaveReaders_threads[r_num];
@@ -286,17 +286,16 @@ int main(int argc, char *argv[]){
     //##################### fase di chiusura ############################
     //###################################################################    
     
-    xpthread_join(signal_thread,NULL,FILE_POSITION);
-
-
     for(int i=0; i<w_num; i++){
         xpthread_join(slaveWriters_threads[i],NULL,FILE_POSITION);
     }
-
-    xpthread_join(masterWriter_thread,NULL,FILE_POSITION); //chiusura capo scrittore
-
-    //TODO: qua attenderemo tutti i thread e puliremo tutta la memoria rimasta aperta (array, buffer, pipe, file etc)
-
+    for( int i=0; i<r_num; i++){
+        xpthread_join(slaveReaders_threads[i],NULL,FILE_POSITION);
+    }
+    
+    xpthread_join(signal_thread,NULL,FILE_POSITION);
+    
+    //##################### pulizia ############################
     xclose(capolet_fd,FILE_POSITION);
     xclose(caposc_fd,FILE_POSITION);
     xclose(lettori_log_fd,FILE_POSITION);
@@ -306,6 +305,7 @@ int main(int argc, char *argv[]){
         free(caposc_buffer.buffer[i]);
         free(capolet_buffer.buffer[i]);
     }
+
     free(caposc_buffer.buffer);
     free(capolet_buffer.buffer);
 
@@ -316,8 +316,6 @@ int main(int argc, char *argv[]){
     xsem_destroy(&data_slot_reader,FILE_POSITION);
 
     //essendo tutti i mutex inizializzati con PTHREAD_MUTEX_INITIALIZER non è necessario liberare la memoria manualmente
-
-    hdestroy();
     return 0;
 }
 
@@ -332,8 +330,12 @@ void aggiungi(char *s){
     if(searchResult == NULL){ //se la ricerca non da alcun risultato
         xpthread_mutex_lock(&ht_mutex,FILE_POSITION);
             searchResult = hsearch(*element_to_search, ENTER); //inseriamo l'elemento che stavamo cercando
-            if(searchResult != NULL) distinct_strings ++; //incremento il contatore di stringhe distinte presenti nella hashmap
         xpthread_mutex_unlock(&ht_mutex,FILE_POSITION);
+
+        xpthread_mutex_lock(&distinct_strings_mutex,FILE_POSITION);
+            if(searchResult != NULL) distinct_strings ++; //incremento il contatore di stringhe distinte presenti nella hashmap
+        xpthread_mutex_unlock(&distinct_strings_mutex,FILE_POSITION);
+        
     }else{
         assert(strcmp(element_to_search->key,searchResult->key)==0);
         xpthread_mutex_lock(&ht_mutex,FILE_POSITION);

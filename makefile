@@ -6,7 +6,7 @@ LDLIBS=-lm -lrt -pthread
 
 
 EXECS= archivio
-OBJ = archivio.o xerrori.o
+OBJ = archivio.o xerrori.o utility.o
 
 # primo target: gli eseguibili sono precondizioni
 
@@ -14,12 +14,12 @@ all: $(EXECS)
 
 
 # regola per la creazioni degli eseguibili utilizzando xerrori.o
-%.out: %.o xerrori.o
+%.out: %.o xerrori.o utility.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 
 # regola per la creazione di file oggetto che dipendono da xerrori.h
-%.o: %.c xerrori.h
+%.o: %.c xerrori.h utility.h
 	$(CC) $(CFLAGS) -c $<
 
 archivio: $(OBJ)
@@ -28,7 +28,13 @@ archivio: $(OBJ)
  
 # cancellazione dei file oggetto e degli eseguibili
 clean: 
-	rm -f *.o $(EXECS)
+	rm -f *.o *.log $(EXECS)
+
+test:
+	./server.py 5 -r 2 -w 4 &                             
+	./client2 file1 file2         
+	./client1 file3               
+	pkill -INT -f server.py  
 
 	
 	

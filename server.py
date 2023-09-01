@@ -74,8 +74,6 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
     os.unlink(capolet_path)
 
     #closing the archive's process
-    #archivioProcess.send_signal(signal.SIGTERM)
-    
     archivioProcess.terminate()
     archivioProcess.wait()
 

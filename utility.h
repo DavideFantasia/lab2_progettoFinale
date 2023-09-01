@@ -23,16 +23,21 @@ pid_t gettid(void)
 #endif
 
 typedef struct{
-    char **buffer; //string array
-    int *index;
-    pthread_mutex_t *mutex;
-    sem_t *sem_free_slots;
-    sem_t *sem_data_items;  
+  char **buffer; //string array
+  int *index;
+  pthread_mutex_t *mutex;
+  sem_t *sem_free_slots;
+  sem_t *sem_data_items;  
 }pc_buffer_t;
 
+typedef struct signal_arg_struct{
+  pthread_t *masterWriter_thread;
+  pthread_t *masterReader_thread;
+}signal_arg_t;
+
 typedef struct master_arg_struct{
-    int pipe_fd; // the file descriptor of the pipe (capolet/caposc)
-    pc_buffer_t *pc_buffer;// producer/consumer buffer    
+  int pipe_fd; // the file descriptor of the pipe (capolet/caposc)
+  pc_buffer_t *pc_buffer;// producer/consumer buffer    
 }master_arg_t;
 
 typedef struct slave_arg_struct{
