@@ -45,8 +45,6 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
   capolet_fd = os.open(capolet_path,os.O_WRONLY, 0o666)
   caposc_fd = os.open(caposc_path, os.O_WRONLY, 0o666)
 
-  print("opened the pipe\n")
-
   if caposc_fd < 0 : print("errore apertura caposc\n")
   if capolet_fd < 0 : print("errore apertura capolet\n")
 
