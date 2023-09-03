@@ -56,5 +56,7 @@ ENTRY *EntryCreate(char *key, int value){
 } 
 
 void free_entry(ENTRY *entry){
-    free(entry->key); free(entry->data); free(entry);
+    free(entry->key);
+    free(entry->data);
+    free(entry);
 }

@@ -18,7 +18,6 @@ capolet_path = "capolet" #path for the named Pipe (FIFO)
 capolet_mutex =  threading.Lock()
 caposc_mutex =  threading.Lock()
 
- 
 def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, port=PORT):
 
   #checking if file "archivio" exist

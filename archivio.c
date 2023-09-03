@@ -13,7 +13,6 @@ pthread_mutex_t lettoriLog_mutex = PTHREAD_MUTEX_INITIALIZER; //mutex for writin
 
 pthread_mutex_t ht_mutex = PTHREAD_MUTEX_INITIALIZER; //mutex for the hashtable
 
-
 void *signal_thread_body(void *voidArg){
     
     signal_arg_t *arg = (signal_arg_t *)voidArg;
