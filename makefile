@@ -31,9 +31,12 @@ clean:
 	rm -f *.o *.log $(EXECS)
 
 test:
-	./server.py 5 -r 2 -w 4 &                             
+	./server.py 5 -r 2 -w 4 -v &
+	timeout 3                             
 	./client2 file1 file2         
+	timeout 3
 	./client1 file3               
+	timeout 3
 	pkill -INT -f server.py  
 
 	
