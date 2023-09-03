@@ -14,7 +14,7 @@ Max_sequence_length = 2048 #massima lunghezza di una sequenza che viene inviata 
 caposc_path = "caposc" #path for the named Pipe (FIFO)
 capolet_path = "capolet" #path for the named Pipe (FIFO)
 
-#creating the mutexs for writing to the pipes
+#creating the mutexs (called locks) for writing to the pipes
 capolet_mutex =  threading.Lock()
 caposc_mutex =  threading.Lock()
 
@@ -26,6 +26,9 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
     print("\n=== ARCHIVIO NOT FOUND; TRY USING 'MAKE' COMMAND ===\n")
     exit(1)
 
+  if ((maxThreads < 1 or numLettori < 1) or numScrittori < 1):
+    print("\n=== Arguments value must be greater than zero ===\n")
+    exit(1)
   
   #creating the FIFO if not existing
   if not os.path.exists(capolet_path):
