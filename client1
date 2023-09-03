@@ -16,7 +16,6 @@ def main(inputFile,host=HOST,port=PORT):
             for line in lines:
                 # inizializzazione socket client 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    print(f"=== Linea da Inviare: {line} ===\n")
                     s.connect((host, port))
                             
                     #invio del tipo di connessione al server
@@ -48,8 +47,6 @@ def recv_all(conn,n):
 # questo codice viene eseguito solo se il file è eseguito direttamente
 # e non importato come modulo con import da un altro file
 if __name__ == '__main__':
-  # parsing della linea di comando vedere la guida
-  #    https://docs.python.org/3/howto/argparse.html
   parser = argparse.ArgumentParser(description=Description, formatter_class=argparse.RawTextHelpFormatter)
   parser.add_argument('fileName', help='text file of input', type = str)  
   parser.add_argument('-a', help='host address', type = str, default=HOST)  
