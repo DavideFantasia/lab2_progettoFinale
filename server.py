@@ -21,6 +21,12 @@ caposc_mutex =  threading.Lock()
  
 def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, port=PORT):
 
+  #checking if file "archivio" exist
+  if not os.path.exists("archivio"):
+    print("\n=== ARCHIVIO NOT FOUND; TRY USING 'MAKE' COMMAND ===\n")
+    exit(1)
+
+  
   #creating the FIFO if not existing
   if not os.path.exists(capolet_path):
     os.mkfifo(capolet_path,mode = 0o666)
@@ -57,9 +63,9 @@ def main(maxThreads, numLettori=3, numScrittori=3,withValgrind=False,host=HOST, 
           # l'esecuzione di submit non è bloccante
           # fino a quando ci sono thread liberi
           executor.submit(connection_handler, conn,addr,capolet_fd,caposc_fd)
+    
     except KeyboardInterrupt:
       pass
-
     # fase di chiusura
 
     #closing the connection

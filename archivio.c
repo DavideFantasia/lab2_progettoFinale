@@ -7,9 +7,9 @@ void aggiungi(char *s);
 int conta(char *s);
 
 volatile sig_atomic_t distinct_strings = 0;
-pthread_mutex_t distinct_strings_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t distinct_strings_mutex = PTHREAD_MUTEX_INITIALIZER; //mutex for modify the counter
 
-pthread_mutex_t lettoriLog_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t lettoriLog_mutex = PTHREAD_MUTEX_INITIALIZER; //mutex for writing to the lettori.log
 
 pthread_mutex_t ht_mutex = PTHREAD_MUTEX_INITIALIZER; //mutex for the hashtable
 
@@ -300,7 +300,7 @@ int main(int argc, char *argv[]){
     xclose(lettori_log_fd,FILE_POSITION);
 
     //pulizia del buffer
-    for(int i=PC_buffer_len-1; i>0; i--){
+    for(int i=PC_buffer_len-1; i>=0; i--){
         free(caposc_buffer.buffer[i]);
         free(capolet_buffer.buffer[i]);
     }

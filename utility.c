@@ -26,15 +26,19 @@ char *read_buffer(pc_buffer_t *buffer){
 
         xpthread_mutex_unlock(buffer->mutex,FILE_POSITION);
     xsem_post(buffer->sem_free_slots,FILE_POSITION);
-    //printf(" returning %s\n", string);
+    
     return string;
 }
 
 int write_buffer(pc_buffer_t *buffer,char *token){
+
+    if(strlen(token) <= 0) return 1;
+
+    char *copia = strdup(token);
     xsem_wait(buffer->sem_free_slots,FILE_POSITION); //aspetto si crei spazio libero
         //metto nella posizione index+1 il token (array circolare)
         int index = (*(buffer->index))++ % PC_buffer_len;
-        buffer->buffer[ index ] = strdup(token);
+        buffer->buffer[ index ] = copia;
     xsem_post(buffer->sem_data_items, FILE_POSITION); //dico di aver occupato uno slot con dei dati
     return 0;    
 }
